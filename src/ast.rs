@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Ast<T> {
     token: T,
     children: Vec<Rc<Ast<T>>>,
