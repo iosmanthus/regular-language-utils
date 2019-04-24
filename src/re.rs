@@ -1,6 +1,7 @@
 use crate::ast::Ast;
 use std::rc::Rc;
 use ReOperator::*;
+use ReToken::*;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ReOperator {
@@ -12,7 +13,7 @@ pub enum ReOperator {
 }
 
 impl ReOperator {
-    pub fn priority(&self) -> i32 {
+    pub fn priority(self) -> i32 {
         match self {
             Left | Right => 0,
             Alter => 1,
@@ -20,8 +21,7 @@ impl ReOperator {
             Star => 3,
         }
     }
-    pub fn eval(&self, ctx: &mut Vec<Ast<ReToken>>) {
-        use ReOperator::*;
+    pub fn eval(self, ctx: &mut Vec<Ast<ReToken>>) {
         let pcnt = match self {
             Concat | Alter => 2,
             Star => 1,
@@ -32,11 +32,11 @@ impl ReOperator {
             children.push(Rc::new(ctx.pop().unwrap()));
         }
         children.reverse();
-        ctx.push(Ast::new(ReToken::Operator(*self), children));
+        ctx.push(Ast::new(Operator(self), children));
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ReToken {
     Symbol(char),
     Operator(ReOperator),
@@ -45,18 +45,18 @@ pub enum ReToken {
 impl ReToken {
     pub fn new(c: char) -> Self {
         match c {
-            '*' => ReToken::Operator(Star),
-            '|' => ReToken::Operator(Alter),
-            '(' => ReToken::Operator(Left),
-            ')' => ReToken::Operator(Right),
-            _ => ReToken::Symbol(c),
+            '*' => Operator(Star),
+            '|' => Operator(Alter),
+            '(' => Operator(Left),
+            ')' => Operator(Right),
+            _ => Symbol(c),
         }
     }
-    pub fn is_operator(&self) -> bool {
+    pub fn is_operator(self) -> bool {
         !self.is_symbol()
     }
-    pub fn is_symbol(&self) -> bool {
-        if let ReToken::Symbol(_) = self {
+    pub fn is_symbol(self) -> bool {
+        if let Symbol(_) = self {
             true
         } else {
             false
@@ -64,7 +64,7 @@ impl ReToken {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Re {
     ast: Ast<ReToken>,
 }
@@ -74,7 +74,7 @@ impl Re {
         let mut ops: Vec<ReOperator> = vec![];
         let mut asts: Vec<Ast<ReToken>> = vec![];
         // let `prev` be a `(` to push the first symbol into stack
-        let mut prev = ReToken::Operator(Left);
+        let mut prev = Operator(Left);
 
         for c in pattern.chars() {
             // Construct a token from a char
@@ -83,19 +83,19 @@ impl Re {
 
             if c.is_symbol() {
                 match prev {
-                    ReToken::Operator(Alter) | ReToken::Operator(Left) => {
+                    Operator(Alter) | Operator(Left) => {
                         asts.push(Ast::new(c, vec![]));
                     }
                     _ => {
                         temp = Some(c);
-                        c = ReToken::Operator(Concat);
+                        c = Operator(Concat);
                     }
                 }
                 prev = if temp.is_none() { c } else { temp.unwrap() }
             }
 
             if c.is_operator() {
-                if let ReToken::Operator(func) = c {
+                if let Operator(func) = c {
                     match func {
                         Left => ops.push(func),
                         _ => {
@@ -103,15 +103,15 @@ impl Re {
                                 && func.priority() <= ops.last().unwrap().priority()
                             {
                                 let func = ops.pop().unwrap();
-                                if let ReOperator::Left = func {
+                                if let Left = func {
                                     break;
                                 }
                                 func.eval(&mut asts);
                             }
-                            if func != ReOperator::Right {
+                            if func != Right {
                                 ops.push(func);
                             }
-                            if func == ReOperator::Concat {
+                            if func == Concat {
                                 asts.push(Ast::new(temp.unwrap(), vec![]));
                             } else {
                                 prev = c;
@@ -129,5 +129,31 @@ impl Re {
         Re {
             ast: asts[0].clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_re_parse() {
+        let re = Re::new("(1*2)|3");
+        let ast = Ast::new(
+            Operator(Alter),
+            vec![
+                Rc::new(Ast::new(
+                    Operator(Concat),
+                    vec![
+                        Rc::new(Ast::new(
+                            Operator(Star),
+                            vec![Rc::new(Ast::new(Symbol('1'), vec![]))],
+                        )),
+                        Rc::new(Ast::new(Symbol('2'), vec![])),
+                    ],
+                )),
+                Rc::new(Ast::new(Symbol('3'), vec![])),
+            ],
+        );
+        assert_eq!(Re { ast }, re);
     }
 }
