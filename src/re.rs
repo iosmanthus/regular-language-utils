@@ -32,6 +32,11 @@ impl ReOperator {
             children.push(Rc::new(ctx.pop().unwrap()));
         }
         children.reverse();
+        let children = if !children.is_empty() {
+            Some(children)
+        } else {
+            None
+        };
         ctx.push(Ast::new(Operator(self), children));
     }
 }
@@ -84,7 +89,7 @@ impl Re {
             if c.is_symbol() {
                 match prev {
                     Operator(Alter) | Operator(Left) => {
-                        asts.push(Ast::new(c, vec![]));
+                        asts.push(Ast::new(c, None));
                     }
                     _ => {
                         temp = Some(c);
@@ -112,7 +117,7 @@ impl Re {
                                 ops.push(func);
                             }
                             if func == Concat {
-                                asts.push(Ast::new(temp.unwrap(), vec![]));
+                                asts.push(Ast::new(temp.unwrap(), None));
                             } else {
                                 prev = c;
                             }
@@ -130,6 +135,10 @@ impl Re {
             ast: asts[0].clone(),
         }
     }
+
+    pub(crate) fn ast(&self) -> &Ast<ReToken> {
+        &self.ast
+    }
 }
 
 #[cfg(test)]
@@ -140,19 +149,19 @@ mod tests {
         let re = Re::new("(1*2)|3");
         let ast = Ast::new(
             Operator(Alter),
-            vec![
+            Some(vec![
                 Rc::new(Ast::new(
                     Operator(Concat),
-                    vec![
+                    Some(vec![
                         Rc::new(Ast::new(
                             Operator(Star),
-                            vec![Rc::new(Ast::new(Symbol('1'), vec![]))],
+                            Some(vec![Rc::new(Ast::new(Symbol('1'), None))]),
                         )),
-                        Rc::new(Ast::new(Symbol('2'), vec![])),
-                    ],
+                        Rc::new(Ast::new(Symbol('2'), None)),
+                    ]),
                 )),
-                Rc::new(Ast::new(Symbol('3'), vec![])),
-            ],
+                Rc::new(Ast::new(Symbol('3'), None)),
+            ]),
         );
         assert_eq!(Re { ast }, re);
     }
