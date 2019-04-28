@@ -1,6 +1,9 @@
 use crate::ast::Ast;
+use crate::nfa::{Nfa, Transition};
+use maplit::{hashmap, hashset};
 use std::rc::Rc;
 use ReOperator::*;
+use ReToken::*;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ReOperator {
@@ -12,7 +15,7 @@ pub enum ReOperator {
 }
 
 impl ReOperator {
-    pub fn priority(&self) -> i32 {
+    pub fn priority(self) -> i32 {
         match self {
             Left | Right => 0,
             Alter => 1,
@@ -20,8 +23,7 @@ impl ReOperator {
             Star => 3,
         }
     }
-    pub fn eval(&self, ctx: &mut Vec<Ast<ReToken>>) {
-        use ReOperator::*;
+    pub fn eval(self, ctx: &mut Vec<Ast<ReToken>>) {
         let pcnt = match self {
             Concat | Alter => 2,
             Star => 1,
@@ -32,11 +34,16 @@ impl ReOperator {
             children.push(Rc::new(ctx.pop().unwrap()));
         }
         children.reverse();
-        ctx.push(Ast::new(ReToken::Operator(*self), children));
+        let children = if !children.is_empty() {
+            Some(children)
+        } else {
+            None
+        };
+        ctx.push(Ast::new(Operator(self), children));
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ReToken {
     Symbol(char),
     Operator(ReOperator),
@@ -45,18 +52,18 @@ pub enum ReToken {
 impl ReToken {
     pub fn new(c: char) -> Self {
         match c {
-            '*' => ReToken::Operator(Star),
-            '|' => ReToken::Operator(Alter),
-            '(' => ReToken::Operator(Left),
-            ')' => ReToken::Operator(Right),
-            _ => ReToken::Symbol(c),
+            '*' => Operator(Star),
+            '|' => Operator(Alter),
+            '(' => Operator(Left),
+            ')' => Operator(Right),
+            _ => Symbol(c),
         }
     }
-    pub fn is_operator(&self) -> bool {
+    pub fn is_operator(self) -> bool {
         !self.is_symbol()
     }
-    pub fn is_symbol(&self) -> bool {
-        if let ReToken::Symbol(_) = self {
+    pub fn is_symbol(self) -> bool {
+        if let Symbol(_) = self {
             true
         } else {
             false
@@ -64,7 +71,7 @@ impl ReToken {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Re {
     ast: Ast<ReToken>,
 }
@@ -74,7 +81,7 @@ impl Re {
         let mut ops: Vec<ReOperator> = vec![];
         let mut asts: Vec<Ast<ReToken>> = vec![];
         // let `prev` be a `(` to push the first symbol into stack
-        let mut prev = ReToken::Operator(Left);
+        let mut prev = Operator(Left);
 
         for c in pattern.chars() {
             // Construct a token from a char
@@ -83,19 +90,19 @@ impl Re {
 
             if c.is_symbol() {
                 match prev {
-                    ReToken::Operator(Alter) | ReToken::Operator(Left) => {
-                        asts.push(Ast::new(c, vec![]));
+                    Operator(Alter) | Operator(Left) => {
+                        asts.push(Ast::new(c, None));
                     }
                     _ => {
                         temp = Some(c);
-                        c = ReToken::Operator(Concat);
+                        c = Operator(Concat);
                     }
                 }
                 prev = if temp.is_none() { c } else { temp.unwrap() }
             }
 
             if c.is_operator() {
-                if let ReToken::Operator(func) = c {
+                if let Operator(func) = c {
                     match func {
                         Left => ops.push(func),
                         _ => {
@@ -103,16 +110,16 @@ impl Re {
                                 && func.priority() <= ops.last().unwrap().priority()
                             {
                                 let func = ops.pop().unwrap();
-                                if let ReOperator::Left = func {
+                                if let Left = func {
                                     break;
                                 }
                                 func.eval(&mut asts);
                             }
-                            if func != ReOperator::Right {
+                            if func != Right {
                                 ops.push(func);
                             }
-                            if func == ReOperator::Concat {
-                                asts.push(Ast::new(temp.unwrap(), vec![]));
+                            if func == Concat {
+                                asts.push(Ast::new(temp.unwrap(), None));
                             } else {
                                 prev = c;
                             }
@@ -129,5 +136,101 @@ impl Re {
         Re {
             ast: asts[0].clone(),
         }
+    }
+
+    fn ast(&self) -> &Ast<ReToken> {
+        &self.ast
+    }
+}
+
+impl From<Re> for Nfa<usize, char> {
+    fn from(re: Re) -> Self {
+        use ReOperator::*;
+        use ReToken::*;
+        fn from(ast: &Ast<ReToken>, id: &mut usize) -> Nfa<usize, char> {
+            match ast.token() {
+                &Symbol(a) => {
+                    let result = Nfa::new(
+                        *id,
+                        hashset! {*id+1},
+                        hashmap! {
+                            (*id,Transition::Symbol(a)) => hashset! {*id+1}
+                        },
+                    );
+                    // Consume two state id
+                    *id += 2;
+                    result
+                }
+                Operator(Concat) => {
+                    let children = ast.children().unwrap();
+                    let (l, r) = (from(&children[0], id), from(&children[1], id));
+                    l.concat(r)
+                }
+
+                Operator(Alter) => {
+                    let children = ast.children().unwrap();
+                    let (l, r) = (from(&children[0], id), from(&children[1], id));
+                    let result = l.union(r, *id);
+                    *id += 1;
+                    result
+                }
+
+                Operator(Star) => {
+                    let children = ast.children().unwrap();
+                    let leaf = from(&children[0], id);
+                    let result = leaf.star(*id, *id + 1);
+                    *id += 2;
+                    result
+                }
+                _ => unreachable!(),
+            }
+        }
+        from(re.ast(), &mut 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_re_parse() {
+        let re = Re::new("(1*2)|3");
+        let ast = Ast::new(
+            Operator(Alter),
+            Some(vec![
+                Rc::new(Ast::new(
+                    Operator(Concat),
+                    Some(vec![
+                        Rc::new(Ast::new(
+                            Operator(Star),
+                            Some(vec![Rc::new(Ast::new(Symbol('1'), None))]),
+                        )),
+                        Rc::new(Ast::new(Symbol('2'), None)),
+                    ]),
+                )),
+                Rc::new(Ast::new(Symbol('3'), None)),
+            ]),
+        );
+        assert_eq!(Re { ast }, re);
+    }
+
+    #[test]
+    fn test_nfa_from_re() {
+        use crate::re::Re;
+        let start = 2;
+        let accept_states = hashset! {7};
+        let transitions = hashmap! {
+            (0,Transition::Symbol('a')) => hashset!{1},
+            (4,Transition::Symbol('b')) => hashset!{5},
+            (6,Transition::Epsilon) => hashset!{4,7},
+            (1,Transition::Epsilon) => hashset!{2},
+            (5,Transition::Epsilon) => hashset!{6},
+            (2,Transition::Epsilon) => hashset!{0,3},
+            (3,Transition::Epsilon) => hashset!{6},
+        };
+        assert_eq!(
+            Nfa::new(start, accept_states, transitions),
+            Nfa::from(Re::new("a*b*"))
+        );
     }
 }
