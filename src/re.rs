@@ -1,4 +1,6 @@
 use crate::ast::Ast;
+use crate::nfa::{Nfa, Transition};
+use maplit::{hashmap, hashset};
 use std::rc::Rc;
 use ReOperator::*;
 use ReToken::*;
@@ -136,8 +138,54 @@ impl Re {
         }
     }
 
-    pub(crate) fn ast(&self) -> &Ast<ReToken> {
+    fn ast(&self) -> &Ast<ReToken> {
         &self.ast
+    }
+}
+
+impl From<Re> for Nfa<usize, char> {
+    fn from(re: Re) -> Self {
+        use ReOperator::*;
+        use ReToken::*;
+        fn from(ast: &Ast<ReToken>, id: &mut usize) -> Nfa<usize, char> {
+            match ast.token() {
+                &Symbol(a) => {
+                    let result = Nfa::new(
+                        *id,
+                        hashset! {*id+1},
+                        hashmap! {
+                            (*id,Transition::Symbol(a)) => hashset! {*id+1}
+                        },
+                    );
+                    // Consume two state id
+                    *id += 2;
+                    result
+                }
+                Operator(Concat) => {
+                    let children = ast.children().unwrap();
+                    let (l, r) = (from(&children[0], id), from(&children[1], id));
+                    l.concat(r)
+                }
+
+                Operator(Alter) => {
+                    let children = ast.children().unwrap();
+                    let (l, r) = (from(&children[0], id), from(&children[1], id));
+                    let result = l.union(r, *id);
+                    *id += 1;
+                    result
+                }
+
+                Operator(Star) => {
+                    let children = ast.children().unwrap();
+                    let leaf = from(&children[0], id);
+                    let result = leaf.star(*id, *id + 1);
+                    *id += 2;
+                    result
+                }
+                _ => unreachable!(),
+            }
+        }
+        from(re.ast(), &mut 0)
     }
 }
 
@@ -164,5 +212,25 @@ mod tests {
             ]),
         );
         assert_eq!(Re { ast }, re);
+    }
+
+    #[test]
+    fn test_nfa_from_re() {
+        use crate::re::Re;
+        let start = 2;
+        let accept_states = hashset! {7};
+        let transitions = hashmap! {
+            (0,Transition::Symbol('a')) => hashset!{1},
+            (4,Transition::Symbol('b')) => hashset!{5},
+            (6,Transition::Epsilon) => hashset!{4,7},
+            (1,Transition::Epsilon) => hashset!{2},
+            (5,Transition::Epsilon) => hashset!{6},
+            (2,Transition::Epsilon) => hashset!{0,3},
+            (3,Transition::Epsilon) => hashset!{6},
+        };
+        assert_eq!(
+            Nfa::new(start, accept_states, transitions),
+            Nfa::from(Re::new("a*b*"))
+        );
     }
 }
